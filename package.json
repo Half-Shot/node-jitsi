@@ -1,0 +1,21 @@
+{
+  "name": "node-jitsi",
+  "version": "0.0.1",
+  "description": "A Node.JS client library for Jitsi Meet",
+  "main": "lib/index.js\\",
+  "author": "Half-Shot",
+  "license": "MIT",
+  "private": false,
+  "dependencies": {
+    "@xmpp/client": "^0.11.1",
+    "@xmpp/connection": "^0.11.0",
+    "axios": "^0.19.2",
+    "sdp-jingle-json": "^3.1.0",
+    "wrtc": "^0.4.4"
+  },
+  "devDependencies": {
+    "@types/node": "^12",
+    "source-map-support": "^0.5.16",
+    "typescript": "^3.8.3"
+  }
+}
