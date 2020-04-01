@@ -22,7 +22,8 @@ so setting it up will be fairly standard.
 
 A set of very high level milestones for the project:
 
-- [ ] Join Jitsi Meet conferences
+- [x] Join Jitsi Meet conferences
+  - [x] Over TCP (normal XMPP)
   - [ ] Over BOSH
 - [ ] Send messages in conference rooms
 - [ ] Listen to audio
@@ -32,6 +33,4 @@ A set of very high level milestones for the project:
 
 ## Support
 
-Come visit us at [@Half-Shot:half-shot.uk](https://matrix.to/#/#node-jitsi:half-shot.uk)
-
-Contact [@Half-Shot:half-shot.uk](https://matrix.to/#/@Half-Shot:half-shot.uk) for more information.
+Come visit us at [#node-jitsi:half-shot.uk](https://matrix.to/#/#node-jitsi:half-shot.uk)!
