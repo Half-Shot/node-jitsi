@@ -90,14 +90,19 @@ export class JitsiClient {
         const sdp = Jingle2SDP(stanza, "", "responder", "incoming");
         console.log(sdp);
         const description = new RTCSessionDescription();
-        description.type = "answer";
+        description.type = "offer";
         description.sdp = sdp;
         console.log(description);
-        await this.peerConnection.setRemoteDescription(description);
-        // Add tracks
-        const answer = await this.peerConnection.createAnswer();
-        this.peerConnection.setLocalDescription(answer);
-        console.log(answer); // Need to send this back somehow.
+        try {
+            await this.peerConnection.setRemoteDescription(description);
+            // Add tracks
+            const answer = await this.peerConnection.createAnswer();
+            this.peerConnection.setLocalDescription(answer);
+            console.log(answer); // Need to send this back somehow.
+        } catch (ex) {
+            console.log(ex);
+            process.exit(1);
+        }
     }
 
     private onError(err) {
