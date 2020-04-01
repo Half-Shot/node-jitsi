@@ -22,7 +22,8 @@ so setting it up will be fairly standard.
 
 A set of very high level milestones for the project:
 
-- [ ] Join Jitsi Meet conferences (over BOSH)
+- [ ] Join Jitsi Meet conferences
+  - [ ] Over BOSH
 - [ ] Send messages in conference rooms
 - [ ] Listen to audio
 - [ ] Send audio

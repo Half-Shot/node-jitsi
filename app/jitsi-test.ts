@@ -1,8 +1,13 @@
 import { JitsiClient } from "../src/JitsiClient";
 
+// Allow self signed
+
+process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = '0';
+let jitsiClient: JitsiClient;
 async function main() {
-    const jitsiClient = new JitsiClient("https://jitsi.modular.im/http-bind", "jitsi.modular.im");
-    await jitsiClient.connect('aaaaa');
+    jitsiClient = new JitsiClient("xmpp://jitsi.modular.im", "jitsi.modular.im", "conference.jitsi.modular.im");
+    await jitsiClient.connect();
+    await jitsiClient.joinConference('testingbridge2');
 }
 
 main().then((result) => {
@@ -11,3 +16,7 @@ main().then((result) => {
     console.error("Failed:", ex);
     process.exit(1);
 })
+
+process.on("beforeExit", () => {
+    jitsiClient.disconnect();
+});
