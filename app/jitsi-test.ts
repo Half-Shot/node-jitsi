@@ -7,7 +7,7 @@ let jitsiClient: JitsiClient;
 async function main() {
     jitsiClient = new JitsiClient("xmpp://jitsi.modular.im", "jitsi.modular.im", "conference.jitsi.modular.im");
     await jitsiClient.connect();
-    await jitsiClient.joinConference('testingbridge2');
+    await jitsiClient.joinConference('testingbridge3');
 }
 
 main().then((result) => {

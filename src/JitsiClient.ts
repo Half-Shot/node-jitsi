@@ -75,6 +75,7 @@ export class JitsiClient {
 
     private async onJingle(stanza: Element) {
         console.log("JINGLE:", stanza.toString());
+        const action = stanza.attr("action");
         if (stanza.attr("action") !== "session-initiate") {
             console.log("Not sure how to handle this");
             return;
@@ -86,9 +87,11 @@ export class JitsiClient {
         this.peerConnection = new RTCPeerConnection({
             iceServers: [] // We should define some.
         });
-        const sdp = Jingle2SDP(stanza, "responder", "incoming");
+        const sdp = Jingle2SDP(stanza, "", "responder", "incoming");
         console.log(sdp);
-        const description = new RTCSessionDescription(sdp);
+        const description = new RTCSessionDescription();
+        description.type = "answer";
+        description.sdp = sdp;
         console.log(description);
         await this.peerConnection.setRemoteDescription(description);
         // Add tracks
