@@ -191,54 +191,7 @@ function SdpContentToElement(content) {
 }
 
 export function CandidateFromJingle(cand: Element) {
-    let line = 'a=candidate:';
-
-    line += cand.getAttr('foundation');
-    line += ' ';
-    line += cand.getAttr('component');
-    line += ' ';
-
-    let protocol = cand.getAttr('protocol');
-
-    line += protocol; // .toUpperCase(); // chrome M23 doesn't like this
-    line += ' ';
-    line += cand.getAttr('priority');
-    line += ' ';
-    line += cand.getAttr('ip');
-    line += ' ';
-    line += cand.getAttr('port');
-    line += ' ';
-    line += 'typ';
-    line += ` ${cand.getAttr('type')}`;
-    line += ' ';
-    switch (cand.getAttr('type')) {
-    case 'srflx':
-    case 'prflx':
-    case 'relay':
-        if (cand.getAttr('rel-addr')
-                && cand.getAttr('rel-port')) {
-            line += 'raddr';
-            line += ' ';
-            line += cand.getAttr('rel-addr');
-            line += ' ';
-            line += 'rport';
-            line += ' ';
-            line += cand.getAttr('rel-port');
-            line += ' ';
-        }
-        break;
-    }
-    if (protocol.toLowerCase() === 'tcp') {
-        line += 'tcptype';
-        line += ' ';
-        line += cand.getAttr('tcptype');
-        line += ' ';
-    }
-    line += 'generation';
-    line += ' ';
-    line += cand.getAttr('generation') || '0';
-
-    return `${line}\r\n`;
+    return cand.attrs;
 }
 
 export function SDP2Jingle(sdpBlob: string, role: string, direction: string) {
@@ -258,4 +211,25 @@ export function SDP2Jingle(sdpBlob: string, role: string, direction: string) {
     });
     sdp.contents.forEach(content => jingleElement.append(SdpContentToElement(content)));
     return jingleElement;
+}
+
+export function candidatesToJingle(candidates: RTCIceCandidate[]) {
+    const ufrag = candidates[0].usernameFragment;
+    const name = candidates[0].sdpMid;
+    const transport = x("transport", {
+        ufrag,
+    });
+    candidates.forEach((candidate) => {
+        const candidateJson = {...candidate};
+        delete candidateJson.candidate;
+        transport.append(x("candidate", candidateJson));
+    })
+    const contentElem = x("content", {
+        creator: "responder",
+        name, // XXX: Guessing here.
+    }, transport);
+    return x("jingle", {
+        action: "transport-info",
+        xmlns: "urn:xmpp:jingle:1"
+    }, contentElem);
 }
