@@ -1,5 +1,5 @@
-import { Element } from "@xmpp/xml";
-import { toSessionSDP } from 'sdp-jingle-json';
+import { Element, x } from "@xmpp/xml";
+import { toSessionSDP, toSessionJSON } from 'sdp-jingle-json';
 export function Jingle2SDP(jingleElement: Element, responder: string, role: string, direction: string) {
     const groups = jingleElement.getChildren("group")!.map((groupEl) => ({
         semantics: groupEl.getAttr('semantics'),
@@ -77,7 +77,6 @@ export function Jingle2SDP(jingleElement: Element, responder: string, role: stri
               value: fp.getText(),
             })),
         }
-        console.log(transport);
         return {
             name: e.getAttr("name"),
             creator: e.getAttr("creator"),
@@ -88,12 +87,175 @@ export function Jingle2SDP(jingleElement: Element, responder: string, role: stri
     });
 
     return toSessionSDP({
-        "action": jingleElement.attr("action"),
-        "initiator": jingleElement.attr("initiator"),
+        action: jingleElement.attr("action"),
+        initiator: jingleElement.attr("initiator"),
         responder,
-        "sid": jingleElement.attr("sid"),
+        sid: jingleElement.attr("sid"),
         // ---- Content payload
-        "groups": groups,
-        "contents": contents,
+        groups: groups,
+        contents: contents,
     }, { role, direction});
+}
+
+/***
+ * 
+  contents: [
+    {
+      creator: 'responder',
+      name: 'audio',
+      application: [Object],
+      transport: [Object],
+      senders: 'initiator'
+    },
+    {
+      creator: 'initiator',
+      name: 'video',
+      application: [Object],
+      transport: [Object],
+      senders: 'initiator'
+    }
+  ],
+  groups: [ { semantics: 'BUNDLE', contents: [Array] } ]
+}
+*/
+
+function SdpContentToElement(content) {
+    const contentElement = x("content", {
+        creator: content.creator,
+        name: content.name,
+        senders: content.senders,
+    });
+    const descriptionElement = x("description", {
+        media: content.application.media,
+        ssrc: content.application.ssrc,
+        xmlns: "urn:xmpp:jingle:apps:rtp:1",
+    });
+    if (content.application.mux) {
+        descriptionElement.append(x('rtcp-mux'));
+    }
+    content.application.payloads.forEach((payload) => {
+        const payloadElement = x("payload-type", {
+            channels: payload.channels,
+            clockrate: payload.clockrate,
+            id: payload.id,
+            name: payload.name,
+        });
+        payload.parameters.forEach((params) => 
+            payloadElement.append(x("parameter", {
+                name: params.key,
+                value: params.value,
+            }))
+        );
+        payload.feedback.forEach((feedback) => 
+            payloadElement.append(x("rtcp-fb", {
+                id: feedback.id,
+                type: feedback.type,
+                subtype: feedback.subtype,
+            }))
+        );
+        descriptionElement.append(payloadElement);
+    });
+    content.application.sources.forEach((source) => 
+        descriptionElement.append(x("source", {
+            ssrc: source.ssrc,
+            xmlns: "urn:xmpp:jingle:apps:rtp:ssma:0",
+        }, source.parameters.map((param => x("parameter", {
+            name: param.key,
+            value: param.value,
+        })))))
+    );
+    content.application.headerExtensions.forEach((ext) => 
+        descriptionElement.append(x("rtp-hdrext", {
+            id: ext.id,
+            senders: ext.senders,
+            uri: ext.uri,
+            xmlns: "urn:xmpp:jingle:apps:rtp:rtp-hdrext:0",
+        }))
+    );
+    const transportElement = x("transport", {
+        pwd: content.transport.pwd,
+        ufrag: content.transport.ufrag,
+        // TODO: unhardcode this.
+        transportType: "urn:xmpp:jingle:transports:ice-udp:1",
+    }, x("fingerprint", {
+        hash: content.transport.hash,
+        setup: content.transport.setup,
+    }, content.transport.value));
+    content.transport.candidates.forEach((candidate) => transportElement.append(x(
+        "candidate",
+        candidate,
+    )));
+        contentElement.append(descriptionElement);
+    contentElement.append(transportElement);
+    return contentElement;
+}
+
+export function CandidateFromJingle(cand: Element) {
+    let line = 'a=candidate:';
+
+    line += cand.getAttr('foundation');
+    line += ' ';
+    line += cand.getAttr('component');
+    line += ' ';
+
+    let protocol = cand.getAttr('protocol');
+
+    line += protocol; // .toUpperCase(); // chrome M23 doesn't like this
+    line += ' ';
+    line += cand.getAttr('priority');
+    line += ' ';
+    line += cand.getAttr('ip');
+    line += ' ';
+    line += cand.getAttr('port');
+    line += ' ';
+    line += 'typ';
+    line += ` ${cand.getAttr('type')}`;
+    line += ' ';
+    switch (cand.getAttr('type')) {
+    case 'srflx':
+    case 'prflx':
+    case 'relay':
+        if (cand.getAttr('rel-addr')
+                && cand.getAttr('rel-port')) {
+            line += 'raddr';
+            line += ' ';
+            line += cand.getAttr('rel-addr');
+            line += ' ';
+            line += 'rport';
+            line += ' ';
+            line += cand.getAttr('rel-port');
+            line += ' ';
+        }
+        break;
+    }
+    if (protocol.toLowerCase() === 'tcp') {
+        line += 'tcptype';
+        line += ' ';
+        line += cand.getAttr('tcptype');
+        line += ' ';
+    }
+    line += 'generation';
+    line += ' ';
+    line += cand.getAttr('generation') || '0';
+
+    return `${line}\r\n`;
+}
+
+export function SDP2Jingle(sdpBlob: string, role: string, direction: string) {
+    const sdp = toSessionJSON(sdpBlob, {
+        role,
+        direction,
+        creators: ["responder", "responder"], // One for audio, one for video.
+    });
+    const jingleElement = x("jingle", {
+        xmlns: "urn:xmpp:jingle:1",
+    });
+    sdp.groups.forEach(group => {
+        jingleElement.append(x("group", {
+            semantics: group.semantics,
+        }, group.contents.map(name => x("content", { name }))
+        ));
+    });
+    sdp.contents.forEach(content => jingleElement.append(SdpContentToElement(content)));
+    return jingleElement;
 }
