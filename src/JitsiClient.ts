@@ -7,8 +7,17 @@ import { Jingle2SDP, SDP2Jingle, candidatesToJingle, candidateFromJingle } from 
 import { v4 as uuid } from "uuid";
 import { EventEmitter } from "events";
 import { DiscoInfoResponse } from "./xmpp/DiscoInfoResponse";
+import { ILogger, DummyLogger, LoggerFunc } from "./Logger";
+import { url } from "inspector";
 
 const { RTCAudioSource, RTCAudioSink } = nonstandard;
+
+export interface JitsiClientOpts {
+    logger?: LoggerFunc,
+    iceServers?: {urls: string}[],
+    nick: string,
+    email?: string,
+}
 
 export class JitsiClient extends EventEmitter {
     private client: any;
@@ -24,8 +33,10 @@ export class JitsiClient extends EventEmitter {
     private localCandidateBatch?: RTCIceCandidate[];
     private clientPresence: JitsiUserPresence;
     private roomName!: string;
-    constructor(urlOrHost: string, domain: string, private conferenceDomain: string) {
+    private logger: ILogger;
+    constructor(urlOrHost: string, domain: string, private conferenceDomain: string, private opts: JitsiClientOpts) {
         super();
+        this.logger = opts.logger ? opts.logger('JitsiClient') : new DummyLogger();
         if (urlOrHost.startsWith("http")) {
             throw Error("BOSH is not supported yet");
         }
@@ -41,8 +52,8 @@ export class JitsiClient extends EventEmitter {
         this.clientPresence = {
             audioMuted: false,
             videoMuted: true,
-            email: "gravatar@half-shot.uk",
-            nick: "Test Nick",
+            email: opts.email,
+            nick: opts.nick,
             handRaised: true,
         };
     }
@@ -59,7 +70,7 @@ export class JitsiClient extends EventEmitter {
     }
 
     public async joinConference(roomName: string) {
-        console.log("Joining conference ", roomName);
+        this.logger.info("Joining conference", roomName);
         this.roomName = roomName;
         if (this.state !== "online" || !this.identity) {
             throw Error("Cannot join, not connected");
@@ -74,7 +85,7 @@ export class JitsiClient extends EventEmitter {
     }
 
     private onStanza(stanza: Element) {
-        //console.log("XMPP RX:", stanza);
+        //this.logger.debug("XMPP RX:", stanza);
         let promise: Promise<unknown>|null = null;
         if (stanza.is("iq")) {
             promise = this.onIq(stanza);
@@ -83,7 +94,7 @@ export class JitsiClient extends EventEmitter {
             return;
         }
         promise.catch((err) => {
-            console.log("Failed to handle stanza:", err);
+            this.logger.debug("Failed to handle stanza:", err);
         });
     }
 
@@ -105,7 +116,7 @@ export class JitsiClient extends EventEmitter {
         if (stanza.getChildByAttr("xmlns", "http://jabber.org/protocol/disco#info")) {
             return this.client.write(new DiscoInfoResponse(id, from).xml)
         }
-        console.log(stanza.toString());
+        this.logger.debug(stanza.toString());
     }
 
     private async onRemoteIceCandidate(stanza: Element, from: string, to: string) {
@@ -126,7 +137,7 @@ export class JitsiClient extends EventEmitter {
                 });
                 const candidate = new RTCIceCandidate(rtcCandidate);
                 this.peerConnection.addIceCandidate(candidate);
-                console.log(`Added new candidate`, candidate.candidate);
+                this.logger.debug(`Added new candidate`, candidate.candidate);
             });
         });
     }
@@ -137,9 +148,9 @@ export class JitsiClient extends EventEmitter {
             return;
         }
         const candidateCount = this.localCandidateBatch?.length || 0;
-        console.log(`Got last candidate. Pushing ${candidateCount} candidates`);
+        this.logger.debug(`Got last candidate. Pushing ${candidateCount} candidates`);
         if (candidateCount === 0) {
-            console.warn(`No candidates in batch!`);
+            this.logger.warn(`No candidates in batch!`);
             return;
         }
         const jingleElem = candidatesToJingle(this.localCandidateBatch!);
@@ -156,26 +167,26 @@ export class JitsiClient extends EventEmitter {
     }
 
     private onTrack(evt: RTCTrackEvent) {
-        console.log("OnTrack:", evt);
-        console.log(evt.track, evt.track.kind);
+        this.logger.debug("OnTrack:", evt);
+        this.logger.debug(evt.track, evt.track.kind);
         if (evt.track.kind === "audio") {
-            console.log("Track is audio");
+            this.logger.debug("Track is audio");
             let sink = this.remoteAudioSinks[evt.track.id] = new RTCAudioSink(evt.track);
             sink.ondata = (data) => {
-                console.log("DATA:", data);
+                this.logger.debug("DATA:", data);
             };
         }
     }
 
     private onDataChannel(evt: RTCDataChannelEvent) {
-        console.log('Data channel is created!');
-        evt.channel.onopen = function() {
-          console.log('Data channel is open and ready to be used.');
+        this.logger.debug('Data channel is created!');
+        evt.channel.onopen = () => {
+          this.logger.debug('Data channel is open and ready to be used.');
         };
     }
 
     private onConnectionStateChange(state) {
-        console.log("onconnectionstatechange", state);
+        this.logger.info("Peer connection state change", state);
         if (state === "connecting") {
             // Resend presence
             this.client.write(new JitsiPresence(
@@ -188,24 +199,20 @@ export class JitsiClient extends EventEmitter {
     }
 
     private initalisePeerConnection() {
-        console.log("Creating new peer connection");
+        this.logger.debug("Creating new peer connection");
         this.peerConnection = new RTCPeerConnection({
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' }
-            ], // We should define some.
+            iceServers: this.opts.iceServers,
             sdpSemantics: 'unified-plan',
         });
         this.peerConnection.onicecandidate = (evt) => this.onLocalIceCandidate(evt);
         this.peerConnection.ontrack = this.onTrack.bind(this);
         this.peerConnection.ondatachannel = this.onDataChannel.bind(this);
-        this.peerConnection.onnegotiationneeded = (...args) => console.log("onnegotiationneeded", args);
-        this.peerConnection.onremovetrack = (...args) => console.log("onremovetrack", args);
-        this.peerConnection.onconnectionstatechange = (...args) => this.onConnectionStateChange(this.peerConnection.connectionState);
-        this.peerConnection.oniceconnectionstatechange = (...args) => console.log("oniceconnectionstatechange", this.peerConnection.iceConnectionState);
-        this.peerConnection.onicegatheringstatechange= (...args) => console.log("onicegatheringstatechange", this.peerConnection.iceGatheringState);
-        this.peerConnection.onsignalingstatechange= (...args) => console.log("onsignalingstatechange", this.peerConnection.signalingState);
+        this.peerConnection.onnegotiationneeded = (...args) => this.logger.debug("onnegotiationneeded", args);
+        this.peerConnection.onremovetrack = (...args) => this.logger.debug("onremovetrack", args);
+        this.peerConnection.onconnectionstatechange = () => this.onConnectionStateChange(this.peerConnection.connectionState);
+        this.peerConnection.oniceconnectionstatechange = () => this.logger.debug("oniceconnectionstatechange", this.peerConnection.iceConnectionState);
+        this.peerConnection.onicegatheringstatechange= () => this.logger.debug("onicegatheringstatechange", this.peerConnection.iceGatheringState);
+        this.peerConnection.onsignalingstatechange= () => this.logger.debug("onsignalingstatechange", this.peerConnection.signalingState);
     }
 
     private async onJingle(stanza: Element, from: string, to: string) {
@@ -213,27 +220,27 @@ export class JitsiClient extends EventEmitter {
         const sid = stanza.attr("sid");
         if (action === "transport-info") {
             if (!this.peerConnection) {
-                console.warn("Cannot handle transport-info: peerConnection not set");
+                this.logger.warn("Cannot handle transport-info: peerConnection not set");
                 return;
             }
             this.onRemoteIceCandidate(stanza, from, to);
             return;
         }
         if (action !== "session-initiate") {
-            console.log(stanza.toString());
-            console.log("Not sure how to handle", action, from);
+            this.logger.debug(stanza.toString());
+            this.logger.debug("Not sure how to handle", action, from);
             return;
         }
         if (from.endsWith("focus")) {
-            console.log("Got req from focus, ignroing");
+            this.logger.debug("Got req from focus, ignoring so we can use P2P");
             // Hack: Force use of P2P
             return;
         }
-        console.log(`Got session-initiate from ${from}`);
+        this.logger.debug(`Got session-initiate from ${from}`);
         if (this.peerConnection) {
-            console.log(`Ignoring request for new peer connection`);
+            this.logger.debug(`Ignoring request for new peer connection`);
             return;
-            // console.log("Already had a peer connection, creating new one");
+            // this.logger.debug("Already had a peer connection, creating new one");
             // this.peerConnection.close();
         }
         this.initalisePeerConnection();
@@ -245,7 +252,7 @@ export class JitsiClient extends EventEmitter {
         description.type = "offer";
         description.sdp = sdp;
         try {
-            console.log("Setting remote description");
+            this.logger.debug("Setting remote description");
             await this.peerConnection.setRemoteDescription(description);
             // Add tracks
             const channel = this.peerConnection.createDataChannel(
@@ -254,11 +261,11 @@ export class JitsiClient extends EventEmitter {
                 }
             );
             channel.onopen = function(event) {
-                console.log("OPEN");
+                this.logger.debug("OPEN");
                 channel.send('Hi you!');
             }
             channel.onmessage = function(event) {
-                console.log(event.data);
+                this.logger.debug(event.data);
             }
             this.sources.forEach((s) => {
                 this.peerConnection.addTrack(s.createTrack());
@@ -267,8 +274,8 @@ export class JitsiClient extends EventEmitter {
             this.peerConnection.setLocalDescription(answer);
             return this.sendSDPAnswer(to, from, answer.sdp, sid);
         } catch (ex) {
-            console.log(ex);
-            process.exit(1);
+            this.logger.error('Failed to handle session-initiate', ex);
+            this.emit('error', Error('Failed to handle session-initiate' + ex));
         }
     }
 
@@ -277,7 +284,7 @@ export class JitsiClient extends EventEmitter {
         answerElement.attr("action", "session-accept");
         answerElement.attr("responder", from);
         answerElement.attr("sid", sid);
-        console.log("SENDING ANSWER");
+        this.logger.debug("Sending SDP answer");
         return this.client.send(xml("iq", {
             from,
             to,
@@ -288,18 +295,18 @@ export class JitsiClient extends EventEmitter {
 
     private onError(err) {
         this.state = "error";
-        console.log("XMPP ERROR:", err);
+        this.logger.error("XMPP ERROR:", err);
     }
 
     private onOffline() {
         this.state = "offline";
-        console.log("XMPP OFFLINE");
+        this.logger.warn("XMPP OFFLINE");
     }
 
     private onOnline(myJid: JID) {
         this.state = "online";
         this.identity = myJid;
-        console.log("XMPP ONLINE AS", myJid.toString());
+        this.logger.info("Connected to XMPP server as", myJid.toString());
     }
 
     public addSource(arg0: any) {

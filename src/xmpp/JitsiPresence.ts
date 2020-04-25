@@ -2,7 +2,7 @@ export interface JitsiUserPresence {
     videoMuted: boolean,
     audioMuted: boolean,
     avatarId?: string,
-    email: string,
+    email?: string,
     nick: string,
     handRaised: boolean,
 }
@@ -12,9 +12,10 @@ export class JitsiPresence {
     public get xml() {
         const mucJoin = this.isJoin ? '<x xmlns="http://jabber.org/protocol/muc"/>\n': "";
         const handRaised = this.state.handRaised ? "<jitsi_participant_raisedHand/>\n" : "";
+        const email = this.state.email ? `<email>${this.state.email}</email>\n` : "";
+
         return `<presence to="${this.roomName}@${this.conferenceServer}/${this.identity}" xmlns="jabber:client">
-            ${mucJoin}${handRaised}<nick xmlns="http://jabber.org/protocol/nick">${this.state.nick}</nick>
-            <email>${this.state.email}</email>
+            ${mucJoin}${handRaised}${email}<nick xmlns="http://jabber.org/protocol/nick">${this.state.nick}</nick>
             <videomuted xmlns="http://jitsi.org/jitmeet/video">${this.state.videoMuted}</videomuted>
             <audiomuted xmlns="http://jitsi.org/jitmeet/audio">${this.state.audioMuted}</audiomuted>
         </presence>`;
