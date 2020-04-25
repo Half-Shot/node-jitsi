@@ -18,6 +18,7 @@ export class DiscoInfoResponse {
             <feature var="urn:xmpp:jingle:transports:dtls-sctp:1"/>
             <feature var="urn:xmpp:jingle:transports:ice-udp:1"/>
             <feature var="urn:xmpp:rayo:client:1"/>
+            <feature var='http://jitsi.org/protocol/colibri'/>
         </query>
         </iq>
         `;

@@ -1,6 +1,6 @@
 import { client } from "@xmpp/client";
 import { JID } from "@xmpp/jid";
-import { JitsiJoinConference } from "./xmpp/JitsiJoinConf";
+import { JitsiPresence, JitsiUserPresence } from "./xmpp/JitsiPresence";
 import { RTCPeerConnection, RTCSessionDescription, RTCPeerConnectionIceEvent, RTCIceCandidate, nonstandard } from 'wrtc';
 import xml, { Element } from "@xmpp/xml";
 import { Jingle2SDP, SDP2Jingle, candidatesToJingle, candidateFromJingle } from "./JingleSDP";
@@ -22,6 +22,8 @@ export class JitsiClient extends EventEmitter {
     private myLocalId?: string;
     private sid?: string;
     private localCandidateBatch?: RTCIceCandidate[];
+    private clientPresence: JitsiUserPresence;
+    private roomName!: string;
     constructor(urlOrHost: string, domain: string, private conferenceDomain: string) {
         super();
         if (urlOrHost.startsWith("http")) {
@@ -36,7 +38,13 @@ export class JitsiClient extends EventEmitter {
         this.client.on("offline", this.onOffline.bind(this));
         this.client.on("online", this.onOnline.bind(this));
         this.client.on("stanza", this.onStanza.bind(this));
-        urlOrHost.split(":");
+        this.clientPresence = {
+            audioMuted: false,
+            videoMuted: true,
+            email: "gravatar@half-shot.uk",
+            nick: "Test Nick",
+            handRaised: true,
+        };
     }
 
     public async connect() {
@@ -52,14 +60,16 @@ export class JitsiClient extends EventEmitter {
 
     public async joinConference(roomName: string) {
         console.log("Joining conference ", roomName);
+        this.roomName = roomName;
         if (this.state !== "online" || !this.identity) {
             throw Error("Cannot join, not connected");
         }
-        this.client.write(new JitsiJoinConference(
-            roomName,
+        this.client.write(new JitsiPresence(
+            this.roomName,
             this.conferenceDomain,
             this.identity.resource,
-            "TestingAccount",
+            this.clientPresence,
+            true,
         ).xml);
     }
 
@@ -93,7 +103,7 @@ export class JitsiClient extends EventEmitter {
             return this.client.write(`<iq from='${to}' to='${from}' id='${id}' type='result'/>`)
         }
         if (stanza.getChildByAttr("xmlns", "http://jabber.org/protocol/disco#info")) {
-            return this.client.write(new DiscoInfoResponse(id, from))
+            return this.client.write(new DiscoInfoResponse(id, from).xml)
         }
         console.log(stanza.toString());
     }
@@ -116,7 +126,7 @@ export class JitsiClient extends EventEmitter {
                 });
                 const candidate = new RTCIceCandidate(rtcCandidate);
                 this.peerConnection.addIceCandidate(candidate);
-                console.log(`Added new candidate ${candidate}`)
+                console.log(`Added new candidate`, candidate.candidate);
             });
         });
     }
@@ -126,8 +136,14 @@ export class JitsiClient extends EventEmitter {
             this.localCandidateBatch!.push(evt);
             return;
         }
-        console.log("Got last candidate, pushing");
+        const candidateCount = this.localCandidateBatch?.length || 0;
+        console.log(`Got last candidate. Pushing ${candidateCount} candidates`);
+        if (candidateCount === 0) {
+            console.warn(`No candidates in batch!`);
+            return;
+        }
         const jingleElem = candidatesToJingle(this.localCandidateBatch!);
+        this.localCandidateBatch = [];
         jingleElem.attr("sid", this.sid);
         jingleElem.attr("initiator", this.remoteId);
         this.client.send(xml("iq", {
@@ -141,7 +157,7 @@ export class JitsiClient extends EventEmitter {
 
     private onTrack(evt: RTCTrackEvent) {
         console.log("OnTrack:", evt);
-        console.log(evt.track);
+        console.log(evt.track, evt.track.kind);
         if (evt.track.kind === "audio") {
             console.log("Track is audio");
             let sink = this.remoteAudioSinks[evt.track.id] = new RTCAudioSink(evt.track);
@@ -151,7 +167,28 @@ export class JitsiClient extends EventEmitter {
         }
     }
 
+    private onDataChannel(evt: RTCDataChannelEvent) {
+        console.log('Data channel is created!');
+        evt.channel.onopen = function() {
+          console.log('Data channel is open and ready to be used.');
+        };
+    }
+
+    private onConnectionStateChange(state) {
+        console.log("onconnectionstatechange", state);
+        if (state === "connecting") {
+            // Resend presence
+            this.client.write(new JitsiPresence(
+                this.roomName,
+                this.conferenceDomain,
+                this.identity!.resource,
+                this.clientPresence,
+                false,
+            ).xml);        }
+    }
+
     private initalisePeerConnection() {
+        console.log("Creating new peer connection");
         this.peerConnection = new RTCPeerConnection({
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
@@ -162,9 +199,10 @@ export class JitsiClient extends EventEmitter {
         });
         this.peerConnection.onicecandidate = (evt) => this.onLocalIceCandidate(evt);
         this.peerConnection.ontrack = this.onTrack.bind(this);
+        this.peerConnection.ondatachannel = this.onDataChannel.bind(this);
         this.peerConnection.onnegotiationneeded = (...args) => console.log("onnegotiationneeded", args);
         this.peerConnection.onremovetrack = (...args) => console.log("onremovetrack", args);
-        this.peerConnection.onconnectionstatechange = (...args) => console.log("onconnectionstatechange", this.peerConnection.connectionState);
+        this.peerConnection.onconnectionstatechange = (...args) => this.onConnectionStateChange(this.peerConnection.connectionState);
         this.peerConnection.oniceconnectionstatechange = (...args) => console.log("oniceconnectionstatechange", this.peerConnection.iceConnectionState);
         this.peerConnection.onicegatheringstatechange= (...args) => console.log("onicegatheringstatechange", this.peerConnection.iceGatheringState);
         this.peerConnection.onsignalingstatechange= (...args) => console.log("onsignalingstatechange", this.peerConnection.signalingState);
@@ -182,36 +220,46 @@ export class JitsiClient extends EventEmitter {
             return;
         }
         if (action !== "session-initiate") {
+            console.log(stanza.toString());
             console.log("Not sure how to handle", action, from);
             return;
         }
-        if (this.peerConnection) {
-            console.log("Already have a peer connection!");
+        if (from.endsWith("focus")) {
+            console.log("Got req from focus, ignroing");
+            // Hack: Force use of P2P
             return;
+        }
+        console.log(`Got session-initiate from ${from}`);
+        if (this.peerConnection) {
+            console.log(`Ignoring request for new peer connection`);
+            return;
+            // console.log("Already had a peer connection, creating new one");
+            // this.peerConnection.close();
         }
         this.initalisePeerConnection();
         this.sid = sid;
         this.remoteId = from;
         this.localCandidateBatch = [];
-        const channel = this.peerConnection.createDataChannel(
-            'JVB data channel', {
-                protocol: 'http://jitsi.org/protocols/colibri'
-            }
-        );
-        channel.onopen = function(event) {
-            channel.send('Hi you!');
-        }
-        channel.onmessage = function(event) {
-            console.log(event.data);
-        }
         const sdp = Jingle2SDP(stanza, "", "responder", "incoming");
-        console.log(sdp);
         const description = new RTCSessionDescription();
         description.type = "offer";
         description.sdp = sdp;
         try {
+            console.log("Setting remote description");
             await this.peerConnection.setRemoteDescription(description);
             // Add tracks
+            const channel = this.peerConnection.createDataChannel(
+                'JVB data channel', {
+                    protocol: 'http://jitsi.org/protocols/colibri'
+                }
+            );
+            channel.onopen = function(event) {
+                console.log("OPEN");
+                channel.send('Hi you!');
+            }
+            channel.onmessage = function(event) {
+                console.log(event.data);
+            }
             this.sources.forEach((s) => {
                 this.peerConnection.addTrack(s.createTrack());
             })

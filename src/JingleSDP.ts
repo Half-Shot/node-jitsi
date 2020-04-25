@@ -7,7 +7,7 @@ export function Jingle2SDP(jingleElement: Element, responder: string, role: stri
         contents: groupEl.getChildren("content").map((el) => el.getAttr('name')),
     }));
 
-
+    console.log(jingleElement.toString());
     const contents = jingleElement.getChildren("content").map((e) => {
         const name = e.getAttr("name");
         const descriptionElement = e.getChild("description")!;
@@ -36,13 +36,19 @@ export function Jingle2SDP(jingleElement: Element, responder: string, role: stri
                 type: params.getAttr("type"),
                 subtype: params.getAttr("subtype"),
             }))
+            // Do not parse any payloads with rtx.
+        })).filter((p) => p.name !== 'rtx');
+        const sourceGroups = descriptionElement.getChildren("ssrc-group").map((ssrcGroup) => ({
+            semantics: ssrcGroup.getAttr("semantics"),
+            sources: ssrcGroup.getChildren("source").map((e) => e.getAttr("ssrc")),
         }));
         const application = {
             encryption: [],
-            sourceGroups: [],
-            ssrc: "",
-            bandwidth: "",
-            bandwidthType: "",
+            sourceGroups,
+            // bandwidth: {
+            //     type: 
+            //     bandwidth: 
+            // }
             // More hacky naughiness
             applicationType: name === "data" ? "datachannel" : "rtp",
             media: descriptionElement.getAttr("media"),
@@ -54,7 +60,7 @@ export function Jingle2SDP(jingleElement: Element, responder: string, role: stri
 
         const transportElement = e.getChild("transport")!;
         const transport: any = {
-            transportType: "",
+            transportType: "iceUdp",
             ufrag: transportElement.getAttr("ufrag"),
             pwd: transportElement.getAttr("pwd"),
             mux: !!transportElement.getChild("rtcp-mux"),
@@ -72,6 +78,7 @@ export function Jingle2SDP(jingleElement: Element, responder: string, role: stri
                 port: candidate.getAttr("port"),
             })),
             fingerprints: transportElement.getChildren("fingerprint").map((fp) => ({
+              setup: fp.getAttr("setup"),
               hash: fp.getAttr("hash"),
               value: fp.getText(),
             })),
@@ -94,7 +101,7 @@ export function Jingle2SDP(jingleElement: Element, responder: string, role: stri
         }
     });
 
-    return toSessionSDP({
+    const sdpObject = {
         action: jingleElement.attr("action"),
         initiator: jingleElement.attr("initiator"),
         responder,
@@ -102,7 +109,9 @@ export function Jingle2SDP(jingleElement: Element, responder: string, role: stri
         // ---- Content payload
         groups: groups,
         contents: contents,
-    }, { role, direction});
+    };
+
+    return toSessionSDP(sdpObject, {role, direction});
 }
 
 /***

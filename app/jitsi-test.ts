@@ -8,7 +8,7 @@ async function main() {
     jitsiClient = new JitsiClient("xmpp://jitsi.modular.im", "jitsi.modular.im", "conference.jitsi.modular.im");
     jitsiClient.addSource(new RTCAudioSourceSineWave());
     await jitsiClient.connect();
-    await jitsiClient.joinConference('testingbridge3');
+    await jitsiClient.joinConference('testingbridge2');
 }
 
 main().then((result) => {
