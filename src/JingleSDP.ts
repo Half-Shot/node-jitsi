@@ -1,17 +1,15 @@
 import { Element, x } from "@xmpp/xml";
 import { toSessionSDP, toSessionJSON } from 'sdp-jingle-json';
+
 export function Jingle2SDP(jingleElement: Element, responder: string, role: string, direction: string) {
     const groups = jingleElement.getChildren("group")!.map((groupEl) => ({
         semantics: groupEl.getAttr('semantics'),
-        // TODO: Fix application -- Not sure what to do, it doens't give us a payload type.
-        contents: groupEl.getChildren("content").map((el) => el.getAttr('name')).filter((name) => name !== 'data'),
+        contents: groupEl.getChildren("content").map((el) => el.getAttr('name')),
     }));
 
 
-    const contents = jingleElement.getChildren("content").filter((e) => {
-        // TODO: Fix application -- Not sure what to do, it doens't give us a payload type.
-        return !(e.getChild("description")?.getAttr("media") === "application");
-    }).map((e) => {
+    const contents = jingleElement.getChildren("content").map((e) => {
+        const name = e.getAttr("name");
         const descriptionElement = e.getChild("description")!;
         const sources = descriptionElement.getChildren("sources").map((srcE) => ({
             ssrc: srcE.getAttr("ssrc"),
@@ -45,7 +43,8 @@ export function Jingle2SDP(jingleElement: Element, responder: string, role: stri
             ssrc: "",
             bandwidth: "",
             bandwidthType: "",
-            applicationType: "rtp",
+            // More hacky naughiness
+            applicationType: name === "data" ? "datachannel" : "rtp",
             media: descriptionElement.getAttr("media"),
             sources,
             headerExtensions,
@@ -54,12 +53,12 @@ export function Jingle2SDP(jingleElement: Element, responder: string, role: stri
         }
 
         const transportElement = e.getChild("transport")!;
-        const transport = {
+        const transport: any = {
             transportType: "",
             ufrag: transportElement.getAttr("ufrag"),
             pwd: transportElement.getAttr("pwd"),
             mux: !!transportElement.getChild("rtcp-mux"),
-            //setup: transportElement.getChild("fingerpint")!.getAttr("setup"),
+            setup: transportElement.getChild("fingerprint")?.getAttr("setup"),
             candidates: transportElement.getChildren("candidate").map((candidate) => ({
                 component: candidate.getAttr("component"),
                 foundation: candidate.getAttr("foundation"),
@@ -76,9 +75,18 @@ export function Jingle2SDP(jingleElement: Element, responder: string, role: stri
               hash: fp.getAttr("hash"),
               value: fp.getText(),
             })),
+            sctp: [],
+        }
+        const sctpmap = transportElement.getChildren("sctpmap");
+        if (sctpmap.length) {
+            transport.sctp.push(...sctpmap.map((e) => ({
+                number: e.getAttr("number"),
+                protocol: e.getAttr("protocol"),
+                streams:  e.getAttr("streams"),
+            })));
         }
         return {
-            name: e.getAttr("name"),
+            name,
             creator: e.getAttr("creator"),
             senders: e.getAttr("senders"),
             application,
@@ -133,7 +141,8 @@ function SdpContentToElement(content) {
     if (content.application.mux) {
         descriptionElement.append(x('rtcp-mux'));
     }
-    content.application.payloads.forEach((payload) => {
+    // Payloads not defined for data channels
+    (content.application.payloads || []).forEach((payload) => {
         const payloadElement = x("payload-type", {
             channels: payload.channels,
             clockrate: payload.clockrate,
@@ -155,7 +164,7 @@ function SdpContentToElement(content) {
         );
         descriptionElement.append(payloadElement);
     });
-    content.application.sources.forEach((source) => 
+    (content.application.sources || []).forEach((source) => 
         descriptionElement.append(x("source", {
             ssrc: source.ssrc,
             xmlns: "urn:xmpp:jingle:apps:rtp:ssma:0",
@@ -164,7 +173,7 @@ function SdpContentToElement(content) {
             value: param.value,
         })))))
     );
-    content.application.headerExtensions.forEach((ext) => 
+    (content.application.headerExtensions || []).forEach((ext) => 
         descriptionElement.append(x("rtp-hdrext", {
             id: ext.id,
             senders: ext.senders,
@@ -190,8 +199,56 @@ function SdpContentToElement(content) {
     return contentElement;
 }
 
-export function CandidateFromJingle(cand: Element) {
-    return cand.attrs;
+// Taken from https://github.com/jitsi/lib-jitsi-meet/blob/edfad5f51186d70c645c1c05ece88822c2486dc7/modules/xmpp/SDPUtil.js#L399
+export function candidateFromJingle(cand: Element) {
+    let line = 'a=candidate:';
+
+    line += cand.attr('foundation');
+    line += ' ';
+    line += cand.attr('component');
+    line += ' ';
+
+    let protocol = cand.attr('protocol');
+
+    line += protocol; // .toUpperCase(); // chrome M23 doesn't like this
+    line += ' ';
+    line += cand.attr('priority');
+    line += ' ';
+    line += cand.attr('ip');
+    line += ' ';
+    line += cand.attr('port');
+    line += ' ';
+    line += 'typ';
+    line += ` ${cand.attr('type')}`;
+    line += ' ';
+    switch (cand.attr('type')) {
+    case 'srflx':
+    case 'prflx':
+    case 'relay':
+        if (cand.attr('rel-addr')
+                && cand.attr('rel-port')) {
+            line += 'raddr';
+            line += ' ';
+            line += cand.attr('rel-addr');
+            line += ' ';
+            line += 'rport';
+            line += ' ';
+            line += cand.attr('rel-port');
+            line += ' ';
+        }
+        break;
+    }
+    if (protocol.toLowerCase() === 'tcp') {
+        line += 'tcptype';
+        line += ' ';
+        line += cand.attr('tcptype');
+        line += ' ';
+    }
+    line += 'generation';
+    line += ' ';
+    line += cand.attr('generation') || '0';
+
+    return `${line}\r\n`;
 }
 
 export function SDP2Jingle(sdpBlob: string, role: string, direction: string) {

@@ -3,9 +3,10 @@ import { JID } from "@xmpp/jid";
 import { JitsiJoinConference } from "./xmpp/JitsiJoinConf";
 import { RTCPeerConnection, RTCSessionDescription, RTCPeerConnectionIceEvent, RTCIceCandidate, nonstandard } from 'wrtc';
 import xml, { Element } from "@xmpp/xml";
-import { Jingle2SDP, SDP2Jingle, CandidateFromJingle, candidatesToJingle } from "./JingleSDP";
+import { Jingle2SDP, SDP2Jingle, candidatesToJingle, candidateFromJingle } from "./JingleSDP";
 import { v4 as uuid } from "uuid";
 import { EventEmitter } from "events";
+import { DiscoInfoResponse } from "./xmpp/DiscoInfoResponse";
 
 const { RTCAudioSource, RTCAudioSink } = nonstandard;
 
@@ -15,6 +16,7 @@ export class JitsiClient extends EventEmitter {
     private identity?: JID;
     private peerConnection?: RTCPeerConnection;
     private audioSink?: any; //RTCAudioSink;
+    private remoteAudioSinks: {[trackName: string]: any} = {};
     private sources: any[] = [];
     private remoteId?: string;
     private myLocalId?: string;
@@ -78,19 +80,22 @@ export class JitsiClient extends EventEmitter {
     private async onIq(stanza: Element) {
         const { from, to, id } = stanza.attrs;
         const jingleElement = stanza.getChild("jingle");
-        console.log(stanza.toString());
         if (!this.myLocalId) {
+            // HACK TO DETERMINE LOCAL IDENTITY
             this.myLocalId = to;
         }
         if (jingleElement) {
-            // HACK TO DETERMINE LOCAL IDENTITY
             // We need to ack this immediately.
             this.client.write(`<iq from='${to}' to='${from}' id='${id}' type='result'/>`);
-            await this.onJingle(jingleElement as xml.Element, from, to);
+            return this.onJingle(jingleElement as xml.Element, from, to);
         }
         if (stanza.getChild("ping")) {
-            this.client.write(`<iq from='${to}' to='${from}' id='${id}' type='result'/>`)
+            return this.client.write(`<iq from='${to}' to='${from}' id='${id}' type='result'/>`)
         }
+        if (stanza.getChildByAttr("xmlns", "http://jabber.org/protocol/disco#info")) {
+            return this.client.write(new DiscoInfoResponse(id, from))
+        }
+        console.log(stanza.toString());
     }
 
     private async onRemoteIceCandidate(stanza: Element, from: string, to: string) {
@@ -98,11 +103,20 @@ export class JitsiClient extends EventEmitter {
         stanza.getChildren("content").forEach((content) => {
             const transport = content.getChild("transport");
             const usernameFragment = transport?.attrs.ufrag;
-            content.getChild("transport")?.getChildren("candidate").forEach((candidate) => {
-                this.peerConnection.addIceCandidate({
-                    ...CandidateFromJingle(candidate as Element),
-                    usernameFragment,
+            content.getChild("transport")?.getChildren("candidate").forEach((candidateElem) => {
+                let line = candidateFromJingle(candidateElem as Element);
+                line = line.replace('\r\n', '').replace('a=', '');
+
+                // FIXME this code does not care to handle
+                // non-bundle transport
+                const rtcCandidate = new RTCIceCandidate({
+                    sdpMLineIndex: 0,
+                    sdpMid: '',
+                    candidate: line
                 });
+                const candidate = new RTCIceCandidate(rtcCandidate);
+                this.peerConnection.addIceCandidate(candidate);
+                console.log(`Added new candidate ${candidate}`)
             });
         });
     }
@@ -125,6 +139,18 @@ export class JitsiClient extends EventEmitter {
         }, jingleElem));
     }
 
+    private onTrack(evt: RTCTrackEvent) {
+        console.log("OnTrack:", evt);
+        console.log(evt.track);
+        if (evt.track.kind === "audio") {
+            console.log("Track is audio");
+            let sink = this.remoteAudioSinks[evt.track.id] = new RTCAudioSink(evt.track);
+            sink.ondata = (data) => {
+                console.log("DATA:", data);
+            };
+        }
+    }
+
     private initalisePeerConnection() {
         this.peerConnection = new RTCPeerConnection({
             iceServers: [
@@ -135,13 +161,13 @@ export class JitsiClient extends EventEmitter {
             sdpSemantics: 'unified-plan',
         });
         this.peerConnection.onicecandidate = (evt) => this.onLocalIceCandidate(evt);
-        this.peerConnection.ontrack = (...args) => console.log("ontrack", args);
+        this.peerConnection.ontrack = this.onTrack.bind(this);
         this.peerConnection.onnegotiationneeded = (...args) => console.log("onnegotiationneeded", args);
         this.peerConnection.onremovetrack = (...args) => console.log("onremovetrack", args);
+        this.peerConnection.onconnectionstatechange = (...args) => console.log("onconnectionstatechange", this.peerConnection.connectionState);
         this.peerConnection.oniceconnectionstatechange = (...args) => console.log("oniceconnectionstatechange", this.peerConnection.iceConnectionState);
         this.peerConnection.onicegatheringstatechange= (...args) => console.log("onicegatheringstatechange", this.peerConnection.iceGatheringState);
         this.peerConnection.onsignalingstatechange= (...args) => console.log("onsignalingstatechange", this.peerConnection.signalingState);
-
     }
 
     private async onJingle(stanza: Element, from: string, to: string) {
@@ -179,6 +205,7 @@ export class JitsiClient extends EventEmitter {
             console.log(event.data);
         }
         const sdp = Jingle2SDP(stanza, "", "responder", "incoming");
+        console.log(sdp);
         const description = new RTCSessionDescription();
         description.type = "offer";
         description.sdp = sdp;
